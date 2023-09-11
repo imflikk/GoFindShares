@@ -26,11 +26,23 @@ func main() {
 
 	start := time.Now()
 
+	// Custom usage message to make it easier to read
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage Info: %s\n", "GoFindShares.exe")
+
+		flag.VisitAll(func(f *flag.Flag) {
+			fmt.Fprintf(os.Stderr, "    -%v\n\t%v\n", f.Name, f.Usage) // f.Name, f.Value
+		})
+
+		fmt.Fprintf(os.Stderr, "\nExamples: \n\t%s\n", "GoFindShares.exe -target 10.0.0.1")
+		fmt.Fprintf(os.Stderr, "\n\t%ss\n\n", "GoFindShares.exe -file C:\\Folder\\targets.txt -username test -password FakePass")
+	}
+
 	targetIP := flag.String("target", "", "Target IP or hostname")
 	targetFile := flag.String("file", "", "File with list of targets")
-	keywordArg := flag.String("keyword", "", "Keyword to search for in files")
-	usernameArg := flag.String("username", "", "Username to connect to SMB share with")
-	passwordArg := flag.String("password", "", "Password to connect to SMB share with")
+	keywordArg := flag.String("keyword", "", "(Optional) Keyword to search for in files")
+	usernameArg := flag.String("username", "", "(Optional) Username to connect to SMB share with")
+	passwordArg := flag.String("password", "", "(Optional) Password to connect to SMB share with")
 
 	flag.Parse()
 
