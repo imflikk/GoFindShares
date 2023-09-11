@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/LeakIX/go-smb2"
 	"github.com/LeakIX/ntlmssp"
@@ -21,6 +23,8 @@ var username string
 var password string
 
 func main() {
+
+	start := time.Now()
 
 	targetIP := flag.String("target", "", "Target IP or hostname")
 	targetFile := flag.String("file", "", "File with list of targets")
@@ -83,6 +87,13 @@ func main() {
 		}
 
 	}
+
+	end := time.Now()
+
+	elapsed := end.Sub(start)
+
+	fmt.Printf("Elapsed time in seconds: %.2f\n", elapsed.Seconds())
+	fmt.Printf("Elapsed time in milliseconds: %.2f\n", elapsed.Seconds()*1000)
 
 }
 
@@ -154,58 +165,24 @@ func checkServerShares(server string) {
 		return
 	}
 
+	// Create string channel to keep output organized
+	msg := make(chan string)
+	finalMsg := ""
+
+	// Create WaitGroup to use for concurrent calls to walkShareDirs
+	var wg sync.WaitGroup
+	wg.Add(len(names))
+
 	// Loop over found shares
 	for _, name := range names {
-		// Skip over default windows shares
-		// Can be changed if you want to see any of these
-		if name == "IPC$" || name == "PRINT$" || name == "ADMIN$" || name == "C$" {
-			continue
-		}
+		go walkShareDirs(name, server, &wg, msg)
 
-		fullShareName := "\\\\" + server + "\\" + name
-
-		fmt.Println("\n========" + fullShareName + " ========")
-
-		// Walk the current share directory and recursively list all files
-		// This seems to be easier than the commented section below, but keeping it just in case
-		fmt.Printf("%-80s %10s %20s\n", "File Name", "Size", "Keyword found")
-		fmt.Println(strings.Repeat("-", 110))
-		err := filepath.Walk(fullShareName,
-			func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return err
-				}
-
-				keywordFound := ""
-
-				if !info.IsDir() {
-					// Search for keyword if file is less than 5mb
-					if info.Size() < 5000000 {
-						fileBuf, err := os.ReadFile(path)
-						if err != nil {
-							panic(err)
-						}
-						bufAsString := string(fileBuf)
-						//check whether s contains substring text
-						foundWord := strings.Contains(bufAsString, keyword)
-						if foundWord {
-							keywordFound = "yes"
-						}
-					} else {
-						keywordFound = "too large"
-					}
-				}
-
-				fmt.Printf("%-80s %10d %20s\n", path, info.Size(), keywordFound)
-				return nil
-			})
-		if err != nil {
-			log.Println(err)
-		}
-
-		fmt.Println(strings.Repeat("-", 110))
-
+		finalMsg += <-msg
 	}
+
+	wg.Wait()
+
+	fmt.Println(finalMsg)
 }
 
 // Help from ChatGPT to convert a UTF-16 byte array to a string
@@ -223,4 +200,72 @@ func utf16BytesToString(utf16Bytes []byte) string {
 	}
 
 	return str
+}
+
+func walkShareDirs(name string, server string, wg *sync.WaitGroup, ch chan string) {
+	defer wg.Done()
+
+	var finalData string
+
+	// Skip over default windows shares
+	// Can be changed if you want to see any of these
+	if name == "IPC$" || name == "PRINT$" || name == "ADMIN$" || name == "C$" {
+		ch <- ""
+		return
+	}
+
+	fullShareName := "\\\\" + server + "\\" + name
+
+	finalData += "\n========" + fullShareName + " ========\n"
+	//fmt.Println("\n========" + fullShareName + " ========")
+
+	finalData += fmt.Sprintf("%-80s %10s %20s\n", "File Name", "Size", "Keyword found")
+	finalData += strings.Repeat("-", 110) + "\n"
+
+	//fmt.Printf("%-80s %10s %20s\n", "File Name", "Size", "Keyword found")
+	//fmt.Println(strings.Repeat("-", 110))
+
+	// Walk the current share directory and recursively list all files
+	err := filepath.Walk(fullShareName,
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			keywordFound := ""
+
+			if !info.IsDir() {
+				// Search for keyword if file is less than 5mb
+				if info.Size() < 5000000 {
+					fileBuf, err := os.ReadFile(path)
+					if err != nil {
+						panic(err)
+					}
+					bufAsString := string(fileBuf)
+					//check whether s contains substring text
+					foundWord := strings.Contains(bufAsString, keyword)
+					if foundWord {
+						keywordFound = "yes"
+					}
+				} else {
+					keywordFound = "too large"
+				}
+			}
+
+			finalData += fmt.Sprintf("%-80s %10d %20s\n", path, info.Size(), keywordFound)
+			//fmt.Printf("%-80s %10d %20s\n", path, info.Size(), keywordFound)
+
+			return nil
+
+		})
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	finalData += strings.Repeat("-", 110) + "\n"
+	//fmt.Println(strings.Repeat("-", 110))
+
+	ch <- finalData
+
 }
