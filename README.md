@@ -8,7 +8,7 @@ This is mostly to practice using Go for making tools, but is meant to imitate ho
 - [x] Command line option to provide input file of SMB servers
 - [x] Ability to check content of found files for keywords
   - [ ] Expand this to allow for multiple keywords
-  - [ ] Add file size limit for keyword checking
+  - [x] Add file size limit for keyword checking
 - [ ] Output findings to more readable format (CSV?)
 - [ ] Re-format into a better Go project structure
 - [ ] Add concurrency support

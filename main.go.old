@@ -4,28 +4,23 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/LeakIX/go-smb2"
-	"github.com/LeakIX/ntlmssp"
+	"github.com/hirochachacha/go-smb2"
 )
 
 var keyword string
-var credsSet bool
-var username string
-var password string
 
 func main() {
 
 	targetIP := flag.String("target", "", "Target IP or hostname")
 	targetFile := flag.String("file", "", "File with list of targets")
 	keywordArg := flag.String("keyword", "", "Keyword to search for in files")
-	usernameArg := flag.String("username", "", "Username to connect to SMB share with")
-	passwordArg := flag.String("password", "", "Password to connect to SMB share with")
 
 	flag.Parse()
 
@@ -39,18 +34,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Check if credentials were provided.  If not use anonymous
-	if *usernameArg == "" && *passwordArg == "" {
-		credsSet = false
-		fmt.Println("\n[*] No credentials provided, connecting as anonymous user.")
-	} else {
-		credsSet = true
-		username = *usernameArg
-		password = *passwordArg
-		fmt.Printf("\n[*] Using credentials: %s:%s\n", username, password)
-	}
-
-	// Check if a keyword was provided, if not default to "password"
 	if *keywordArg != "" {
 		keyword = *keywordArg
 	} else {
@@ -99,35 +82,11 @@ func checkServerShares(server string) {
 
 	fmt.Printf("[+] Successfully connected to %s!\n", server)
 
-	var ntlmsspClient *ntlmssp.Client
-	var errClient error
-
-	// Use provided credentials, otherwise connect as anonymous (non-existent username defaults to anonymous)
-	if credsSet {
-		ntlmsspClient, errClient = ntlmssp.NewClient(
-			ntlmssp.SetCompatibilityLevel(3),
-			ntlmssp.SetUserInfo(username, password),
-			ntlmssp.SetDomain(""))
-		if errClient != nil {
-			fmt.Println("[-] Error creating NTLMSSP Client")
-			//panic(err)
-			return
-		}
-	} else {
-		ntlmsspClient, errClient = ntlmssp.NewClient(
-			ntlmssp.SetCompatibilityLevel(3),
-			ntlmssp.SetUserInfo("thisdoesntexist", ""),
-			ntlmssp.SetDomain(""))
-		if errClient != nil {
-			fmt.Println("[-] Error creating NTLMSSP Client")
-			//panic(err)
-			return
-		}
-	}
-
+	// Create smb2 object with authentication information
 	d := &smb2.Dialer{
-		Initiator: &smb2.NTLMSSPInitiator{
-			NTLMSSPClient: ntlmsspClient,
+		Initiator: &smb2.NTLMInitiator{
+			User:     "shareuser",
+			Password: "",
 		},
 	}
 
@@ -139,11 +98,6 @@ func checkServerShares(server string) {
 		return
 	}
 	defer s.Logoff()
-
-	// Retrieve remote server info
-	hostname, _ := ntlmsspClient.SessionDetails().TargetInfo.Get(ntlmssp.MsvAvDNSComputerName)
-	domain, _ := ntlmsspClient.SessionDetails().TargetInfo.Get(ntlmssp.MsvAvNbDomainName)
-	fmt.Printf("[*] Server info\n\tHostname: %s\n\tDomain: %s\n", string(hostname), string(domain))
 
 	// List all shares available on remote server
 	names, err := s.ListSharenames()
@@ -166,42 +120,70 @@ func checkServerShares(server string) {
 
 		// Walk the current share directory and recursively list all files
 		// This seems to be easier than the commented section below, but keeping it just in case
-		fmt.Printf("%-80s %10s %20s\n", "File Name", "Size", "Keyword found")
-		fmt.Println(strings.Repeat("-", 110))
+		fmt.Printf("%-50s %10s %10s\n", "File Name", "Size", "Keyword found")
+		fmt.Println(strings.Repeat("-", 80))
 		err := filepath.Walk(fullShareName,
 			func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err
 				}
 
-				keywordFound := ""
+				keywordFound := false
 
 				if !info.IsDir() {
-					// Search for keyword if file is less than 5mb
-					if info.Size() < 5000000 {
-						fileBuf, err := os.ReadFile(path)
-						if err != nil {
-							panic(err)
-						}
-						bufAsString := string(fileBuf)
-						//check whether s contains substring text
-						foundWord := strings.Contains(bufAsString, keyword)
-						if foundWord {
-							keywordFound = "yes"
-						}
-					} else {
-						keywordFound = "too large"
+					fileBuf, err := ioutil.ReadFile(path)
+					if err != nil {
+						panic(err)
 					}
+					bufAsString := string(fileBuf)
+					//check whether s contains substring text
+					keywordFound = strings.Contains(bufAsString, keyword)
 				}
 
-				fmt.Printf("%-80s %10d %20s\n", path, info.Size(), keywordFound)
+				fmt.Printf("%-50s %10d %10t\n", path, info.Size(), keywordFound)
 				return nil
 			})
 		if err != nil {
 			log.Println(err)
 		}
 
-		fmt.Println(strings.Repeat("-", 110))
+		fmt.Println(strings.Repeat("-", 80))
 
+		///////////
+		// Keeping the below method just in case it's needed later
+		///////////
+
+		// Temporarily mount each share
+		// fs, err := s.Mount("\\\\" + server + "\\" + name)
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// defer fs.Umount()
+
+		// // Open a file object for the current directory
+		// dir, err := fs.Open(".")
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// defer dir.Close()
+
+		// // Read all files located in the current directory
+		// fi, err := dir.Readdir(-1)
+		// if err != nil {
+		// 	panic(err)
+		// }
+
+		// // Loop over all files found in directory and print them out
+		// fmt.Printf("%-30s %10s\n", "File Name", "Size")
+		// fmt.Println("--------------------------------------------")
+		// for _, v := range fi {
+		// 	if v.IsDir() {
+		// 		//dirsToCheck = append(dirsToCheck, v.Name())
+		// 		fmt.Printf("%-20s (dir) %-10s\n", v.Name(), "")
+		// 	} else {
+		// 		fmt.Printf("%-30s %10d\n", v.Name(), v.Size())
+		// 	}
+
+		// }
 	}
 }
