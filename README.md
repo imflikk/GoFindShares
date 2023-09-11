@@ -2,7 +2,7 @@
 
 This is mostly to practice using Go for making tools, but is meant to imitate how [Snaffler](https://github.com/SnaffCon/Snaffler) works.
 
-<img width="567" alt="image" src="https://github.com/imflikk/GoFindShares/assets/58894272/67814816-561d-400b-9907-5c4973cb73a0">
+![image](https://github.com/imflikk/GoFindShares/assets/58894272/6d115848-6a5d-4e55-96c2-ca5ecc6b8036)
 
 ### TODO
 - [x] Command line option to provide input file of SMB servers
