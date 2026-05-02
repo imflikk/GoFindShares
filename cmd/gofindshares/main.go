@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/binary"
 	"flag"
 	"fmt"
 	"log"
@@ -13,6 +12,10 @@ import (
 	"sync"
 	"time"
 
+	// Local imports
+	"github.com/imflikk/GoFindShares/pkg/helpers"
+
+	// Github imports
 	"github.com/LeakIX/go-smb2"
 	"github.com/LeakIX/ntlmssp"
 )
@@ -167,7 +170,7 @@ func checkServerShares(server string) {
 	// Retrieve remote server info
 	hostname, _ := ntlmsspClient.SessionDetails().TargetInfo.Get(ntlmssp.MsvAvDNSComputerName)
 	domain, _ := ntlmsspClient.SessionDetails().TargetInfo.Get(ntlmssp.MsvAvNbDomainName)
-	fmt.Printf("[*] Server info\n\tHostname: %s\n\tDomain: %s\n", utf16BytesToString(hostname), utf16BytesToString(domain))
+	fmt.Printf("[*] Server info\n\tHostname: %s\n\tDomain: %s\n", helpers.Utf16BytesToString(hostname), helpers.Utf16BytesToString(domain))
 
 	// List all shares available on remote server
 	names, err := s.ListSharenames()
@@ -195,23 +198,6 @@ func checkServerShares(server string) {
 	wg.Wait()
 
 	fmt.Println(finalMsg)
-}
-
-// Help from ChatGPT to convert a UTF-16 byte array to a string
-func utf16BytesToString(utf16Bytes []byte) string {
-	// Initialize an empty string to store the result
-	var str string
-
-	// Iterate over the byte array in pairs (assuming little-endian encoding)
-	for i := 0; i < len(utf16Bytes); i += 2 {
-		// Read the two bytes as a little-endian UTF-16 code unit
-		codeUnit := binary.LittleEndian.Uint16(utf16Bytes[i : i+2])
-
-		// Convert the UTF-16 code unit to a UTF-8 rune and append it to the string
-		str += string(codeUnit)
-	}
-
-	return str
 }
 
 func walkShareDirs(name string, server string, wg *sync.WaitGroup, ch chan string) {

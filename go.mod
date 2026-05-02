@@ -1,6 +1,6 @@
-module GoFindShares
+module github.com/imflikk/GoFindShares
 
-go 1.20
+go 1.25.0
 
 require (
 	github.com/LeakIX/go-smb2 v1.2.1-0.20220613185734-8c5a650116b4
@@ -9,6 +9,6 @@ require (
 
 require (
 	github.com/geoffgarside/ber v1.1.0 // indirect
-	golang.org/x/crypto v0.27.0 // indirect
-	golang.org/x/text v0.18.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 )
