@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
 
@@ -124,14 +125,14 @@ func WalkShareDirs(name string, server string, keyword string, smbSession *smb2.
 	finalData += "\n========" + fullShareName + " ========\n"
 	//fmt.Println("\n========" + fullShareName + " ========")
 
-	finalData += fmt.Sprintf("%-80s %10s %20s\n", "File Name", "Size", "Keyword found")
-	finalData += strings.Repeat("-", 110) + "\n"
+	finalData += fmt.Sprintf("%-80s %10s %20s %70s\n", "File Name", "Size", "Keyword found", "Context")
+	finalData += strings.Repeat("-", 200) + "\n"
 
 	//fmt.Printf("%-80s %10s %20s\n", "File Name", "Size", "Keyword found")
 	//fmt.Println(strings.Repeat("-", 110))
 
 	// Mount the smb share so we can walk the directories and list files
-	share, mountErr := smbSession.Mount(name)
+	share, mountErr := MountSmbShare(name, smbSession)
 	if mountErr != nil {
 		log.Println("[-] Error mounting share "+name+": ", mountErr)
 		ch <- ""
@@ -139,19 +140,17 @@ func WalkShareDirs(name string, server string, keyword string, smbSession *smb2.
 	}
 	defer share.Umount()
 
-	//fmt.Printf("[*] Successfully mounted %s\n", fullShareName)
-
 	// Open share so we can read files
-	f, openErr := share.Open(".")
+	openShare, openErr := OpenSmbShare(share, ".")
 	if openErr != nil {
 		log.Println("[-] Error opening share "+fullShareName+": ", openErr)
 		ch <- ""
 		return
 	}
-	defer f.Close()
+	defer openShare.Close()
 
 	// Get list of files in share
-	fileEntries, readErr := f.Readdir(0)
+	fileEntries, readErr := ReadFilesInDir(share, openShare)
 	if readErr != nil {
 		log.Println("[-] Error reading share "+fullShareName+": ", readErr)
 		ch <- ""
@@ -159,29 +158,27 @@ func WalkShareDirs(name string, server string, keyword string, smbSession *smb2.
 	}
 
 	for _, entry := range fileEntries {
-		keywordFound := ""
+		//keywordFound := ""
 
 		fileName := entry.Name()
 
-		if !entry.IsDir() {
-			// Search for keyword if file is less than 5mb
-			if entry.Size() < 5000000 {
-				fileBuf, err := share.ReadFile(fileName)
-				if err != nil {
-					panic(err)
-				}
-				bufAsString := string(fileBuf)
-				//check whether s contains substring text
-				foundWord := strings.Contains(bufAsString, keyword)
-				if foundWord {
-					keywordFound = "yes"
-				}
-			} else {
-				keywordFound = "too large"
+		if entry.IsDir() {
+			subDirPath := fileName + "\\"
+			finalData += fmt.Sprintf("%-80s %10s %20s %-70s\n", subDirPath, "<DIR>", "", "")
+			//fmt.Printf("%-80s %10s %20s\n", subDirPath, "<DIR>", "")
+			finalData += RecursiveDirCheck(share, subDirPath, keyword)
+			continue
+		} else {
+			keywordFound, keywordContext, err := CheckFileForKeyword(share, "", entry, keyword, "")
+			if err != nil {
+				log.Println("[-] Error checking file "+entry.Name()+" for keyword: ", err)
+				keywordFound = "error checking file"
 			}
+
+			finalData += fmt.Sprintf("%-80s %10d %20s %-70s\n", fileName, entry.Size(), keywordFound+" ("+keyword+")", keywordContext)
 		}
 
-		finalData += fmt.Sprintf("%-80s %10d %20s\n", fileName, entry.Size(), keywordFound+" ("+keyword+")")
+		//finalData += fmt.Sprintf("%-80s %10d %20s\n", fileName, entry.Size(), keywordFound+" ("+keyword+")")
 		//fmt.Printf("%-80s %10d %20s\n", fileName, entry.Size(), keywordFound)
 	}
 
@@ -190,4 +187,114 @@ func WalkShareDirs(name string, server string, keyword string, smbSession *smb2.
 
 	ch <- finalData
 
+}
+
+func MountSmbShare(name string, smbSession *smb2.Session) (*smb2.Share, error) {
+	share, err := smbSession.Mount(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return share, nil
+}
+
+func OpenSmbShare(share *smb2.Share, path string) (*smb2.File, error) {
+	openShare, err := share.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return openShare, nil
+}
+
+func ReadFilesInDir(share *smb2.Share, openDir *smb2.File) ([]os.FileInfo, error) {
+	fileEntries, err := openDir.Readdir(0)
+	if err != nil {
+		return nil, err
+	}
+
+	return fileEntries, nil
+}
+
+func CheckFileForKeyword(share *smb2.Share, dirPath string, fileEntry os.FileInfo, keyword string, keywordFound string) (string, string, error) {
+	fullSharePath := dirPath + fileEntry.Name()
+
+	keywordContext := ""
+
+	// Search for keyword if file is less than 5mb
+	if fileEntry.Size() < 5000000 {
+		fileBuf, err := share.ReadFile(fullSharePath)
+		if err != nil {
+			panic(err)
+		}
+		bufAsString := string(fileBuf)
+		//check whether s contains substring text
+		foundWord := strings.Contains(bufAsString, keyword)
+		if foundWord {
+			keywordFound = "yes"
+
+			// Search content of file and return 30 characters before and after keyword if found
+			keywordIndex := strings.Index(bufAsString, keyword)
+			startIndex := keywordIndex - 20
+			endIndex := keywordIndex + len(keyword) + 20
+
+			if startIndex < 0 {
+				startIndex = 0
+			}
+			if endIndex > len(bufAsString) {
+				endIndex = len(bufAsString)
+			}
+
+			keywordContext = bufAsString[startIndex:endIndex]
+			// Replace all line breaks in keyword context with literal \n for better formatting in output
+			keywordContext = strings.ReplaceAll(keywordContext, "\r\n", "\\n")
+			fmt.Printf("[*] Keyword found in file: %s\n\tContext: ...%s...\n", fullSharePath, keywordContext)
+		}
+	} else {
+		keywordFound = "too large"
+	}
+
+	return keywordFound, keywordContext, nil
+}
+
+func RecursiveDirCheck(share *smb2.Share, dirPath string, keyword string) (finalData string) {
+
+	// recursively check directories until the content of a folder contains no directory
+	//fmt.Printf("[*] Recursively checking directory: %s\n", dirPath)
+
+	openDir, err := share.Open(dirPath)
+	if err != nil {
+		log.Println("[-] Error opening subdirectory "+dirPath+": ", err)
+		return
+	}
+	defer openDir.Close()
+
+	fileEntries, err := openDir.Readdir(0)
+	if err != nil {
+		log.Println("[-] Error reading subdirectory "+dirPath+": ", err)
+		return
+	}
+
+	for _, entry := range fileEntries {
+		if entry.IsDir() {
+			fmt.Printf("[*] Found subdirectory: %s\n", entry.Name())
+			subDirPath := dirPath + "\\" + entry.Name()
+			finalData += RecursiveDirCheck(share, subDirPath, keyword)
+			//finalData += fmt.Sprintf("%-80s %10s %20s\n", subDirPath+"\\", "<DIR>", "")
+			//fmt.Printf("%-80s %10s %20s\n", subDirPath+"\\", "<DIR>", "")
+			continue
+		} else {
+			//fmt.Printf("[*] Checking file: %s\n", entry.Name())
+			keywordFound, keywordContext, err := CheckFileForKeyword(share, dirPath, entry, keyword, "")
+			if err != nil {
+				log.Println("[-] Error checking file "+entry.Name()+" for keyword: ", err)
+				keywordFound = "error checking file"
+			}
+
+			finalData += fmt.Sprintf("%-80s %10d %20s %-70s\n", dirPath+entry.Name(), entry.Size(), keywordFound+" ("+keyword+")", keywordContext)
+
+		}
+	}
+
+	return finalData
 }
