@@ -2,6 +2,9 @@ package helpers
 
 import (
 	"encoding/binary"
+	"encoding/csv"
+	"fmt"
+	"os"
 )
 
 // Help from ChatGPT to convert a UTF-16 byte array to a string
@@ -19,4 +22,28 @@ func Utf16BytesToString(utf16Bytes []byte) string {
 	}
 
 	return str
+}
+
+func WriteResultsCSV(path string, results []SearchResult) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	w := csv.NewWriter(f)
+	defer w.Flush()
+
+	w.Write([]string{"fileLocation", "fileName", "fileSize", "keywordFound", "keywordContext"})
+	for _, r := range results {
+		w.Write([]string{
+			r.FileLocation,
+			r.FileName,
+			fmt.Sprintf("%d", r.FileSize),
+			r.KeywordFound,
+			r.KeywordContext,
+		})
+	}
+
+	return w.Error()
 }

@@ -13,7 +13,28 @@ import (
 	"github.com/LeakIX/ntlmssp"
 )
 
-func CheckServerShares(server string, credsSet bool, username string, password string, keyword string) {
+type SearchResult struct {
+	FileLocation   string
+	FileName       string
+	FileSize       int64
+	KeywordFound   string
+	KeywordContext string
+}
+
+func CheckServerShares(server string, credsSet bool, username string, password string, keyword string, results []SearchResult) ([]SearchResult, error) {
+
+	// create channel to receive results from concurrent share checks
+	resultsCh := make(chan SearchResult)
+	done := make(chan struct{})
+
+	// Create a goroutine to listen for results from share checks and append them to the results slice
+	go func() {
+		for r := range resultsCh {
+			results = append(results, r)
+		}
+		close(done)
+	}()
+
 	fmt.Printf("\n[*] Attempting to connect to %s...\n", server)
 
 	// Connect to remote server
@@ -21,7 +42,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 	if err != nil {
 		fmt.Println("[-] Error connecting to server: " + server)
 		//panic(err)
-		return
+		return results, err
 	}
 	defer conn.Close()
 
@@ -39,7 +60,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 		if errClient != nil {
 			fmt.Println("[-] Error creating NTLMSSP Client")
 			//panic(err)
-			return
+			return results, errClient
 		}
 	} else {
 		ntlmsspClient, errClient = ntlmssp.NewClient(
@@ -49,7 +70,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 		if errClient != nil {
 			fmt.Println("[-] Error creating NTLMSSP Client")
 			//panic(err)
-			return
+			return results, errClient
 		}
 	}
 
@@ -64,7 +85,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 	if err != nil {
 		fmt.Printf("[-] Error connecting to SMB service on %s\n", server)
 		//panic(err)
-		return
+		return results, err
 	}
 	defer s.Logoff()
 
@@ -78,7 +99,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 	if err != nil {
 		fmt.Printf("[-] Error listing shares on %s\n", server)
 		//panic(err)
-		return
+		return results, err
 	}
 
 	fmt.Printf("[*] Found shares:\n")
@@ -96,7 +117,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 
 	// Loop over found shares
 	for _, name := range names {
-		go WalkShareDirs(name, server, keyword, s, &wg, msg)
+		go WalkShareDirs(name, server, keyword, resultsCh, s, &wg, msg)
 
 		finalMsg += <-msg
 	}
@@ -106,9 +127,11 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 	fmt.Println(finalMsg)
 
 	fmt.Printf("")
+
+	return results, nil
 }
 
-func WalkShareDirs(name string, server string, keyword string, smbSession *smb2.Session, wg *sync.WaitGroup, ch chan string) {
+func WalkShareDirs(name string, server string, keyword string, resultsCh chan SearchResult, smbSession *smb2.Session, wg *sync.WaitGroup, ch chan string) {
 	defer wg.Done()
 
 	var finalData string
@@ -166,16 +189,28 @@ func WalkShareDirs(name string, server string, keyword string, smbSession *smb2.
 			subDirPath := fileName + "\\"
 			finalData += fmt.Sprintf("%-80s %10s %20s %-70s\n", subDirPath, "<DIR>", "", "")
 			//fmt.Printf("%-80s %10s %20s\n", subDirPath, "<DIR>", "")
-			finalData += RecursiveDirCheck(share, subDirPath, keyword)
+			finalData += RecursiveDirCheck(share, subDirPath, keyword, resultsCh)
 			continue
 		} else {
-			keywordFound, keywordContext, err := CheckFileForKeyword(share, "", entry, keyword, "")
+			// This section only runs on files in the root of the share
+			keywordFound, keywordContext, err := CheckFileForKeyword(share, "", entry, keyword, resultsCh, "")
 			if err != nil {
 				log.Println("[-] Error checking file "+entry.Name()+" for keyword: ", err)
 				keywordFound = "error checking file"
 			}
 
 			finalData += fmt.Sprintf("%-80s %10d %20s %-70s\n", fileName, entry.Size(), keywordFound+" ("+keyword+")", keywordContext)
+
+			// send each results into the resultsCh to be saved later
+			if keywordFound != "no" || keywordFound != "too large" || keywordFound != "error checking file" {
+				resultsCh <- SearchResult{
+					FileLocation:   fullShareName + "\\" + fileName,
+					FileName:       name,
+					FileSize:       entry.Size(),
+					KeywordFound:   keyword,
+					KeywordContext: keywordContext,
+				}
+			}
 		}
 
 		//finalData += fmt.Sprintf("%-80s %10d %20s\n", fileName, entry.Size(), keywordFound+" ("+keyword+")")
@@ -189,34 +224,7 @@ func WalkShareDirs(name string, server string, keyword string, smbSession *smb2.
 
 }
 
-func MountSmbShare(name string, smbSession *smb2.Session) (*smb2.Share, error) {
-	share, err := smbSession.Mount(name)
-	if err != nil {
-		return nil, err
-	}
-
-	return share, nil
-}
-
-func OpenSmbShare(share *smb2.Share, path string) (*smb2.File, error) {
-	openShare, err := share.Open(path)
-	if err != nil {
-		return nil, err
-	}
-
-	return openShare, nil
-}
-
-func ReadFilesInDir(share *smb2.Share, openDir *smb2.File) ([]os.FileInfo, error) {
-	fileEntries, err := openDir.Readdir(0)
-	if err != nil {
-		return nil, err
-	}
-
-	return fileEntries, nil
-}
-
-func CheckFileForKeyword(share *smb2.Share, dirPath string, fileEntry os.FileInfo, keyword string, keywordFound string) (string, string, error) {
+func CheckFileForKeyword(share *smb2.Share, dirPath string, fileEntry os.FileInfo, keyword string, resultsCh chan SearchResult, keywordFound string) (string, string, error) {
 	fullSharePath := dirPath + fileEntry.Name()
 
 	keywordContext := ""
@@ -249,6 +257,18 @@ func CheckFileForKeyword(share *smb2.Share, dirPath string, fileEntry os.FileInf
 			// Replace all line breaks in keyword context with literal \n for better formatting in output
 			keywordContext = strings.ReplaceAll(keywordContext, "\r\n", "\\n")
 			fmt.Printf("[*] Keyword found in file: %s\n\tContext: ...%s...\n", fullSharePath, keywordContext)
+
+			// save the results each time something is found
+			if keywordFound != "no" || keywordFound != "too large" || keywordFound != "error checking file" {
+				resultsCh <- SearchResult{
+					FileLocation:   dirPath + fileEntry.Name(),
+					FileName:       fileEntry.Name(),
+					FileSize:       fileEntry.Size(),
+					KeywordFound:   keyword,
+					KeywordContext: keywordContext,
+				}
+			}
+
 		}
 	} else {
 		keywordFound = "too large"
@@ -257,7 +277,7 @@ func CheckFileForKeyword(share *smb2.Share, dirPath string, fileEntry os.FileInf
 	return keywordFound, keywordContext, nil
 }
 
-func RecursiveDirCheck(share *smb2.Share, dirPath string, keyword string) (finalData string) {
+func RecursiveDirCheck(share *smb2.Share, dirPath string, keyword string, resultsCh chan SearchResult) (finalData string) {
 
 	// recursively check directories until the content of a folder contains no directory
 	//fmt.Printf("[*] Recursively checking directory: %s\n", dirPath)
@@ -279,13 +299,13 @@ func RecursiveDirCheck(share *smb2.Share, dirPath string, keyword string) (final
 		if entry.IsDir() {
 			fmt.Printf("[*] Found subdirectory: %s\n", entry.Name())
 			subDirPath := dirPath + "\\" + entry.Name()
-			finalData += RecursiveDirCheck(share, subDirPath, keyword)
+			finalData += RecursiveDirCheck(share, subDirPath, keyword, resultsCh)
 			//finalData += fmt.Sprintf("%-80s %10s %20s\n", subDirPath+"\\", "<DIR>", "")
 			//fmt.Printf("%-80s %10s %20s\n", subDirPath+"\\", "<DIR>", "")
 			continue
 		} else {
 			//fmt.Printf("[*] Checking file: %s\n", entry.Name())
-			keywordFound, keywordContext, err := CheckFileForKeyword(share, dirPath, entry, keyword, "")
+			keywordFound, keywordContext, err := CheckFileForKeyword(share, dirPath, entry, keyword, resultsCh, "")
 			if err != nil {
 				log.Println("[-] Error checking file "+entry.Name()+" for keyword: ", err)
 				keywordFound = "error checking file"
@@ -297,4 +317,31 @@ func RecursiveDirCheck(share *smb2.Share, dirPath string, keyword string) (final
 	}
 
 	return finalData
+}
+
+func MountSmbShare(name string, smbSession *smb2.Session) (*smb2.Share, error) {
+	share, err := smbSession.Mount(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return share, nil
+}
+
+func OpenSmbShare(share *smb2.Share, path string) (*smb2.File, error) {
+	openShare, err := share.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return openShare, nil
+}
+
+func ReadFilesInDir(share *smb2.Share, openDir *smb2.File) ([]os.FileInfo, error) {
+	fileEntries, err := openDir.Readdir(0)
+	if err != nil {
+		return nil, err
+	}
+
+	return fileEntries, nil
 }

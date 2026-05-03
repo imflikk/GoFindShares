@@ -70,11 +70,20 @@ func main() {
 
 	fmt.Printf("\n[*] Keyword to search for: %s\n\n", keyword)
 
+	// create a slice to save results to be exported later
+	var results []helpers.SearchResult
+
 	// Retrieve argument data and pass to function for checking shares
 	if *targetIP != "" {
 		server := *targetIP
 
-		helpers.CheckServerShares(server, credsSet, username, password, keyword)
+		err := error(nil)
+		results, err = helpers.CheckServerShares(server, credsSet, username, password, keyword, results)
+		if err != nil {
+			fmt.Printf("[-] Error checking server shares on %s\n", server)
+			//panic(err)
+			os.Exit(0)
+		}
 	} else {
 		file := *targetFile
 		readFile, err := os.Open(file)
@@ -89,9 +98,25 @@ func main() {
 		fileScanner.Split(bufio.ScanLines)
 
 		for fileScanner.Scan() {
-			helpers.CheckServerShares(fileScanner.Text(), credsSet, username, password, keyword)
+			helpers.CheckServerShares(fileScanner.Text(), credsSet, username, password, keyword, results)
 		}
 
+	}
+
+	fmt.Printf("\n[*] Search complete. Found %d results.\n", len(results))
+
+	// pull results from the results slice and print them to the console
+	for _, result := range results {
+		fmt.Printf("File Location: %s\nFile Name: %s\nFile Size: %d bytes\nKeyword Found: %s\nKeyword Context: %s\n\n",
+			result.FileLocation, result.FileName, result.FileSize, result.KeywordFound, result.KeywordContext)
+	}
+
+	// export results to a CSV file
+	err := helpers.WriteResultsCSV("results.csv", results)
+	if err != nil {
+		fmt.Printf("[-] Error writing results to CSV: %s\n", err)
+	} else {
+		fmt.Printf("[+] Results successfully written to results.csv\n")
 	}
 
 	end := time.Now()
