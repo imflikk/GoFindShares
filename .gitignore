@@ -17,5 +17,8 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Ignore compiled binaries in the bin directory
+bin/
+
 # Go workspace file
 go.work

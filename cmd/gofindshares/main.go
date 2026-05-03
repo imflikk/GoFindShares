@@ -1,0 +1,104 @@
+package main
+
+import (
+	"bufio"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	// Local imports
+	"github.com/imflikk/GoFindShares/pkg/helpers"
+)
+
+func main() {
+
+	var keyword string
+	var credsSet bool
+	var username string
+	var password string
+
+	start := time.Now()
+
+	// Custom usage message to make it easier to read
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage Info: %s\n", "GoFindShares.exe")
+
+		flag.VisitAll(func(f *flag.Flag) {
+			fmt.Fprintf(os.Stderr, "    -%v\n\t%v\n", f.Name, f.Usage) // f.Name, f.Value
+		})
+
+		fmt.Fprintf(os.Stderr, "\nExamples: \n\t%s\n", "GoFindShares.exe -target 10.0.0.1")
+		fmt.Fprintf(os.Stderr, "\n\t%ss\n\n", "GoFindShares.exe -file C:\\Folder\\targets.txt -username test -password FakePass")
+	}
+
+	targetIP := flag.String("target", "", "Target IP or hostname")
+	targetFile := flag.String("file", "", "File with list of targets")
+	keywordArg := flag.String("keyword", "", "(Optional) Keyword to search for in files")
+	usernameArg := flag.String("username", "", "(Optional) Username to connect to SMB share with")
+	passwordArg := flag.String("password", "", "(Optional) Password to connect to SMB share with")
+
+	flag.Parse()
+
+	// Check that target arguments were provided correctly
+	if *targetIP == "" && *targetFile == "" {
+		fmt.Printf("[-] No target or file provided.\n\n")
+		flag.Usage()
+		os.Exit(0)
+	} else if *targetIP != "" && *targetFile != "" {
+		fmt.Printf("[-] Please only provide a target OR file, not both.\n\n")
+		os.Exit(0)
+	}
+
+	// Check if credentials were provided.  If not use anonymous
+	if *usernameArg == "" && *passwordArg == "" {
+		credsSet = false
+		fmt.Println("\n[*] No credentials provided, connecting as anonymous user.")
+	} else {
+		credsSet = true
+		username = *usernameArg
+		password = *passwordArg
+		fmt.Printf("\n[*] Using credentials: %s:%s\n", username, password)
+	}
+
+	// Check if a keyword was provided, if not default to "password"
+	if *keywordArg != "" {
+		keyword = *keywordArg
+	} else {
+		keyword = "password"
+	}
+
+	fmt.Printf("\n[*] Keyword to search for: %s\n\n", keyword)
+
+	// Retrieve argument data and pass to function for checking shares
+	if *targetIP != "" {
+		server := *targetIP
+
+		helpers.CheckServerShares(server, credsSet, username, password, keyword)
+	} else {
+		file := *targetFile
+		readFile, err := os.Open(file)
+
+		if err != nil {
+			fmt.Println(err)
+		}
+		defer readFile.Close()
+
+		fileScanner := bufio.NewScanner(readFile)
+
+		fileScanner.Split(bufio.ScanLines)
+
+		for fileScanner.Scan() {
+			helpers.CheckServerShares(fileScanner.Text(), credsSet, username, password, keyword)
+		}
+
+	}
+
+	end := time.Now()
+
+	elapsed := end.Sub(start)
+
+	fmt.Printf("Elapsed time in seconds: %.2f\n", elapsed.Seconds())
+	fmt.Printf("Elapsed time in milliseconds: %.2f\n", elapsed.Seconds()*1000)
+
+}
