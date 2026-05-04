@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	// Local imports
@@ -13,7 +14,7 @@ import (
 
 func main() {
 
-	var keyword string
+	var keywords []string
 	var credsSet bool
 	var username string
 	var password string
@@ -34,7 +35,7 @@ func main() {
 
 	targetIP := flag.String("target", "", "Target IP or hostname")
 	targetFile := flag.String("file", "", "File with list of targets")
-	keywordArg := flag.String("keyword", "", "(Optional) Keyword to search for in files")
+	keywordsArg := flag.String("keywords", "", "(Optional) Keywords to search for in files (comma-separated)")
 	usernameArg := flag.String("username", "", "(Optional) Username to connect to SMB share with")
 	passwordArg := flag.String("password", "", "(Optional) Password to connect to SMB share with")
 
@@ -62,13 +63,18 @@ func main() {
 	}
 
 	// Check if a keyword was provided, if not default to "password"
-	if *keywordArg != "" {
-		keyword = *keywordArg
+	if *keywordsArg != "" {
+		// check for multiple keywords separated by commas
+		keywords = strings.Split(*keywordsArg, ",")
+		for i, k := range keywords {
+			keywords[i] = strings.TrimSpace(k)
+		}
+		keywords = helpers.Deduplicate(keywords)
 	} else {
-		keyword = "password"
+		keywords = []string{"password"}
 	}
 
-	fmt.Printf("\n[*] Keyword to search for: %s\n\n", keyword)
+	fmt.Printf("\n[*] Keywords to search for: %q\n\n", keywords)
 
 	// create a slice to save results to be exported later
 	var results []helpers.SearchResult
@@ -78,7 +84,7 @@ func main() {
 		server := *targetIP
 
 		err := error(nil)
-		results, err = helpers.CheckServerShares(server, credsSet, username, password, keyword, results)
+		results, err = helpers.CheckServerShares(server, credsSet, username, password, keywords, results)
 		if err != nil {
 			fmt.Printf("[-] Error checking server shares on %s\n", server)
 			//panic(err)
@@ -98,18 +104,21 @@ func main() {
 		fileScanner.Split(bufio.ScanLines)
 
 		for fileScanner.Scan() {
-			helpers.CheckServerShares(fileScanner.Text(), credsSet, username, password, keyword, results)
+			helpers.CheckServerShares(fileScanner.Text(), credsSet, username, password, keywords, results)
 		}
 
 	}
 
-	fmt.Printf("\n[*] Search complete. Found %d results.\n", len(results))
+	// deduplicate results before exporting
+	results = helpers.Deduplicate(results)
+
+	fmt.Printf("\n[*] Search complete. Exporting %d results.\n", len(results))
 
 	// pull results from the results slice and print them to the console
-	for _, result := range results {
-		fmt.Printf("File Location: %s\nFile Name: %s\nFile Size: %d bytes\nKeyword Found: %s\nKeyword Context: %s\n\n",
-			result.FileLocation, result.FileName, result.FileSize, result.KeywordFound, result.KeywordContext)
-	}
+	// for _, result := range results {
+	// 	fmt.Printf("File Location: %s\nFile Name: %s\nFile Size: %d bytes\nKeyword Found: %s\nKeyword Context: %s\n\n",
+	// 		result.FileLocation, result.FileName, result.FileSize, result.KeywordFound, result.KeywordContext)
+	// }
 
 	// export results to a CSV file
 	err := helpers.WriteResultsCSV("results.csv", results)

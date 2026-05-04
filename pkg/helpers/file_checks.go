@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -21,7 +22,7 @@ type SearchResult struct {
 	KeywordContext string
 }
 
-func CheckServerShares(server string, credsSet bool, username string, password string, keyword string, results []SearchResult) ([]SearchResult, error) {
+func CheckServerShares(server string, credsSet bool, username string, password string, keywords []string, results []SearchResult) ([]SearchResult, error) {
 
 	// create channel to receive results from concurrent share checks
 	resultsCh := make(chan SearchResult)
@@ -117,7 +118,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 
 	// Loop over found shares
 	for _, name := range names {
-		go WalkShareDirs(name, server, keyword, resultsCh, s, &wg, msg)
+		go WalkShareDirs(name, server, keywords, resultsCh, s, &wg, msg)
 
 		finalMsg += <-msg
 	}
@@ -131,7 +132,7 @@ func CheckServerShares(server string, credsSet bool, username string, password s
 	return results, nil
 }
 
-func WalkShareDirs(name string, server string, keyword string, resultsCh chan SearchResult, smbSession *smb2.Session, wg *sync.WaitGroup, ch chan string) {
+func WalkShareDirs(name string, server string, keywords []string, resultsCh chan SearchResult, smbSession *smb2.Session, wg *sync.WaitGroup, ch chan string) {
 	defer wg.Done()
 
 	var finalData string
@@ -148,7 +149,7 @@ func WalkShareDirs(name string, server string, keyword string, resultsCh chan Se
 	finalData += "\n========" + fullShareName + " ========\n"
 	//fmt.Println("\n========" + fullShareName + " ========")
 
-	finalData += fmt.Sprintf("%-80s %10s %20s %70s\n", "File Name", "Size", "Keyword found", "Context")
+	finalData += fmt.Sprintf("%-80s %10s %-20s %70s\n", "File Name", "Size", "Keyword found", "Context")
 	finalData += strings.Repeat("-", 200) + "\n"
 
 	//fmt.Printf("%-80s %10s %20s\n", "File Name", "Size", "Keyword found")
@@ -187,97 +188,109 @@ func WalkShareDirs(name string, server string, keyword string, resultsCh chan Se
 
 		if entry.IsDir() {
 			subDirPath := fileName + "\\"
-			finalData += fmt.Sprintf("%-80s %10s %20s %-70s\n", subDirPath, "<DIR>", "", "")
+			finalData += fmt.Sprintf("%-80s %10s %-20s %-70s\n", subDirPath, "<DIR>", "", "")
 			//fmt.Printf("%-80s %10s %20s\n", subDirPath, "<DIR>", "")
-			finalData += RecursiveDirCheck(share, subDirPath, keyword, resultsCh)
+			finalData += RecursiveDirCheck(fullShareName, share, subDirPath, keywords, resultsCh)
 			continue
 		} else {
+
 			// This section only runs on files in the root of the share
-			keywordFound, keywordContext, err := CheckFileForKeyword(share, "", entry, keyword, resultsCh, "")
+			keywordFound, keywordContext, err := CheckFileForKeyword(fullShareName, share, "", entry, keywords, resultsCh, "")
 			if err != nil {
 				log.Println("[-] Error checking file "+entry.Name()+" for keyword: ", err)
 				keywordFound = "error checking file"
 			}
 
-			finalData += fmt.Sprintf("%-80s %10d %20s %-70s\n", fileName, entry.Size(), keywordFound+" ("+keyword+")", keywordContext)
+			finalData += fmt.Sprintf("%-80s %10d %-20s %-70s\n", fileName, entry.Size(), keywordFound, keywordContext)
 
 			// send each results into the resultsCh to be saved later
-			if keywordFound != "no" || keywordFound != "too large" || keywordFound != "error checking file" {
-				resultsCh <- SearchResult{
-					FileLocation:   fullShareName + "\\" + fileName,
-					FileName:       name,
-					FileSize:       entry.Size(),
-					KeywordFound:   keyword,
-					KeywordContext: keywordContext,
-				}
-			}
+			// if strings.Contains(keywordFound, "yes") {
+			// 	resultsCh <- SearchResult{
+			// 		FileLocation:   fullShareName + "\\" + fileName,
+			// 		FileName:       name,
+			// 		FileSize:       entry.Size(),
+			// 		KeywordFound:   keyword,
+			// 		KeywordContext: keywordContext,
+			// 	}
+			// }
 		}
 
 		//finalData += fmt.Sprintf("%-80s %10d %20s\n", fileName, entry.Size(), keywordFound+" ("+keyword+")")
 		//fmt.Printf("%-80s %10d %20s\n", fileName, entry.Size(), keywordFound)
 	}
 
-	finalData += strings.Repeat("-", 110) + "\n"
+	finalData += strings.Repeat("-", 200) + "\n"
 	//fmt.Println(strings.Repeat("-", 110))
 
 	ch <- finalData
 
 }
 
-func CheckFileForKeyword(share *smb2.Share, dirPath string, fileEntry os.FileInfo, keyword string, resultsCh chan SearchResult, keywordFound string) (string, string, error) {
+func CheckFileForKeyword(fullShareName string, share *smb2.Share, dirPath string, fileEntry os.FileInfo, keywords []string, resultsCh chan SearchResult, keywordFound string) (string, string, error) {
 	fullSharePath := dirPath + fileEntry.Name()
 
 	keywordContext := ""
 
-	// Search for keyword if file is less than 5mb
-	if fileEntry.Size() < 5000000 {
-		fileBuf, err := share.ReadFile(fullSharePath)
-		if err != nil {
-			panic(err)
-		}
-		bufAsString := string(fileBuf)
-		//check whether s contains substring text
-		foundWord := strings.Contains(bufAsString, keyword)
-		if foundWord {
-			keywordFound = "yes"
+	for _, keyword := range keywords {
 
-			// Search content of file and return 30 characters before and after keyword if found
-			keywordIndex := strings.Index(bufAsString, keyword)
-			startIndex := keywordIndex - 20
-			endIndex := keywordIndex + len(keyword) + 20
-
-			if startIndex < 0 {
-				startIndex = 0
+		// Search for keyword if file is less than 5mb
+		if fileEntry.Size() < 5000000 {
+			fileBuf, err := share.ReadFile(fullSharePath)
+			if err != nil {
+				panic(err)
 			}
-			if endIndex > len(bufAsString) {
-				endIndex = len(bufAsString)
-			}
+			bufAsString := string(fileBuf)
+			//check whether s contains substring text
+			//foundWord := strings.Contains(bufAsString, keyword)
+			re := regexp.MustCompile("(?i)" + regexp.QuoteMeta(keyword))
+			foundWord := re.MatchString(bufAsString)
 
-			keywordContext = bufAsString[startIndex:endIndex]
-			// Replace all line breaks in keyword context with literal \n for better formatting in output
-			keywordContext = strings.ReplaceAll(keywordContext, "\r\n", "\\n")
-			fmt.Printf("[*] Keyword found in file: %s\n\tContext: ...%s...\n", fullSharePath, keywordContext)
+			if foundWord {
+				keywordFound = "yes"
 
-			// save the results each time something is found
-			if keywordFound != "no" || keywordFound != "too large" || keywordFound != "error checking file" {
-				resultsCh <- SearchResult{
-					FileLocation:   dirPath + fileEntry.Name(),
-					FileName:       fileEntry.Name(),
-					FileSize:       fileEntry.Size(),
-					KeywordFound:   keyword,
-					KeywordContext: keywordContext,
+				// Search content of file and return 30 characters before and after keyword if found
+				//keywordIndex := strings.Index(bufAsString, keyword)
+				keywordIndex := re.FindStringIndex(bufAsString)
+				if keywordIndex == nil {
+					continue
 				}
-			}
 
+				startIndex := keywordIndex[0] - 20
+				endIndex := keywordIndex[0] + len(keyword) + 20
+
+				if startIndex < 0 {
+					startIndex = 0
+				}
+				if endIndex > len(bufAsString) {
+					endIndex = len(bufAsString)
+				}
+
+				keywordContext = bufAsString[startIndex:endIndex]
+				// Replace all line breaks in keyword context with literal \n for better formatting in output
+				keywordContext = strings.ReplaceAll(keywordContext, "\r\n", "\\n")
+				//fmt.Printf("[*] Keyword found in file: %s\n\tContext: ...%s...\n", fullSharePath, keywordContext)
+
+				// save the results each time something is found
+				if strings.Contains(keywordFound, "yes") {
+					resultsCh <- SearchResult{
+						FileLocation:   fullShareName + "\\" + fullSharePath,
+						FileName:       fileEntry.Name(),
+						FileSize:       fileEntry.Size(),
+						KeywordFound:   keyword,
+						KeywordContext: keywordContext,
+					}
+				}
+
+			}
+		} else {
+			keywordFound = "too large"
 		}
-	} else {
-		keywordFound = "too large"
 	}
 
 	return keywordFound, keywordContext, nil
 }
 
-func RecursiveDirCheck(share *smb2.Share, dirPath string, keyword string, resultsCh chan SearchResult) (finalData string) {
+func RecursiveDirCheck(fullShareName string, share *smb2.Share, dirPath string, keywords []string, resultsCh chan SearchResult) (finalData string) {
 
 	// recursively check directories until the content of a folder contains no directory
 	//fmt.Printf("[*] Recursively checking directory: %s\n", dirPath)
@@ -299,19 +312,31 @@ func RecursiveDirCheck(share *smb2.Share, dirPath string, keyword string, result
 		if entry.IsDir() {
 			fmt.Printf("[*] Found subdirectory: %s\n", entry.Name())
 			subDirPath := dirPath + "\\" + entry.Name()
-			finalData += RecursiveDirCheck(share, subDirPath, keyword, resultsCh)
+			finalData += RecursiveDirCheck(fullShareName, share, subDirPath, keywords, resultsCh)
 			//finalData += fmt.Sprintf("%-80s %10s %20s\n", subDirPath+"\\", "<DIR>", "")
 			//fmt.Printf("%-80s %10s %20s\n", subDirPath+"\\", "<DIR>", "")
 			continue
 		} else {
+
 			//fmt.Printf("[*] Checking file: %s\n", entry.Name())
-			keywordFound, keywordContext, err := CheckFileForKeyword(share, dirPath, entry, keyword, resultsCh, "")
+			keywordFound, keywordContext, err := CheckFileForKeyword(fullShareName, share, dirPath, entry, keywords, resultsCh, "")
 			if err != nil {
 				log.Println("[-] Error checking file "+entry.Name()+" for keyword: ", err)
 				keywordFound = "error checking file"
 			}
 
-			finalData += fmt.Sprintf("%-80s %10d %20s %-70s\n", dirPath+entry.Name(), entry.Size(), keywordFound+" ("+keyword+")", keywordContext)
+			finalData += fmt.Sprintf("%-80s %10d %-20s %-70s\n", dirPath+entry.Name(), entry.Size(), keywordFound, keywordContext)
+
+			// send each results into the resultsCh to be saved later
+			// if strings.Contains(keywordFound, "yes") {
+			// 	resultsCh <- SearchResult{
+			// 		FileLocation:   fullShareName + "\\" + dirPath + entry.Name(),
+			// 		FileName:       entry.Name(),
+			// 		FileSize:       entry.Size(),
+			// 		KeywordFound:   keyword,
+			// 		KeywordContext: keywordContext,
+			// 	}
+			// }
 
 		}
 	}

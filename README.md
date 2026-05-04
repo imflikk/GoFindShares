@@ -14,9 +14,10 @@ Optional arguments include: a set of credentials (defaults to anonymous if not p
 - [x] Command line option to provide input file of SMB servers
 - [x] Ability to check content of found files for keywords
   - [ ] Expand this to allow for multiple keywords
+  - [ ] Expand further to have a default config file with lists of common sensitive things to look for, similar to Snaffler.
   - [x] Add file size limit for keyword checking
-- [ ] Output findings to more readable format (CSV?)
-- [ ] Re-format into a better Go project structure
+- [x] Output findings to more readable format (CSV?)
+- [x] Re-format into a better Go project structure
 - [x] Add concurrency support
   - Added goroutines for checking each share, but I'm pretty bad at concurrency, so not entirely sure it's working correctly without testing in a large environment where it can be fully utilized.
 

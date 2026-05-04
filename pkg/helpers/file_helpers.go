@@ -47,3 +47,16 @@ func WriteResultsCSV(path string, results []SearchResult) error {
 
 	return w.Error()
 }
+
+func Deduplicate[T comparable](input []T) []T {
+	seen := make(map[T]struct{}) // Using struct{} saves memory over bool
+	result := make([]T, 0, len(input))
+
+	for _, v := range input {
+		if _, ok := seen[v]; !ok {
+			seen[v] = struct{}{}
+			result = append(result, v)
+		}
+	}
+	return result
+}

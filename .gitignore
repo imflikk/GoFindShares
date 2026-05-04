@@ -20,5 +20,8 @@
 # Ignore compiled binaries in the bin directory
 bin/
 
+# Ignore default results file
+results.csv
+
 # Go workspace file
 go.work
